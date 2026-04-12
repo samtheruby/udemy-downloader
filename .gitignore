@@ -132,3 +132,17 @@ temp/
 *.exe
 # Docker Compose output volume
 output/
+
+# Widevine device keys - never commit these
+*.wvd
+wvkeys/*
+!wvkeys/.gitkeep
+
+# Runtime output and logs
+logs/
+out_dir/
+
+# Local tooling and session data
+dependencies/
+device/
+.claude/
