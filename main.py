@@ -1372,7 +1372,14 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
     logger.info(f"> Using WVD: {os.path.basename(wvd_path)}")
 
     try:
-        mpd_resp = udemy_session._get(mpd_url)
+        import requests as _requests
+        # Udemy pre-signed MPD URLs embed auth in the URL itself, so a plain
+        # GET works even when udemy_session is not available.
+        if udemy_session is not None:
+            mpd_resp = udemy_session._get(mpd_url)
+        else:
+            logger.warning("> udemy_session is not initialized, falling back to plain requests for MPD fetch")
+            mpd_resp = _requests.get(mpd_url, timeout=120)
         if not mpd_resp.ok:
             logger.error(f"> Failed to fetch MPD: {mpd_resp.status_code}")
             return None
@@ -1417,11 +1424,19 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
         pssh = PSSH(pssh_b64)
         challenge = cdm.get_license_challenge(cdm_session, pssh)
 
-        lic_resp = udemy_session._session.post(
-            license_url,
-            data=challenge,
-            headers={"Content-Type": "application/octet-stream"},
-        )
+        if udemy_session is not None:
+            lic_resp = udemy_session._session.post(
+                license_url,
+                data=challenge,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+        else:
+            lic_resp = _requests.post(
+                license_url,
+                data=challenge,
+                headers={"Content-Type": "application/octet-stream"},
+                timeout=120,
+            )
 
         if not lic_resp.ok:
             logger.error(f"> License request failed: {lic_resp.status_code}")
@@ -2218,8 +2233,8 @@ def main():
     else:
         bearer_token = os.getenv("UDEMY_BEARER")
 
+    global udemy_session
     udemy = Udemy(bearer_token)
-    udemy_session = udemy  # expose to fetch_widevine_key running in threads
     portal_name = udemy.extract_portal_name(course_url)
     visit_status = udemy.auth._session.visit(portal_name)
     if not visit_status:
@@ -2227,6 +2242,7 @@ def main():
         sys.exit(1)
 
     udemy.authenticate(portal_name)
+    udemy_session = udemy.session  # Session object; expose to fetch_widevine_key
 
     # if bearer_token:
     #     udemy.session._session.headers.update(
