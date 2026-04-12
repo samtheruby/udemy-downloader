@@ -493,9 +493,9 @@ class Udemy:
                 for h in ["authorization", "x-udemy-client-secret", "x-udemy-client-id",
                           "x-mobile-visit-enabled", "x-version-name", "x-client-name"]:
                     self.session._session.headers.pop(h, None)
-            else:
-                # remove the authentication header
-                del self.session._session.headers["authorization"]
+        else:
+            # remove the authentication header
+            del self.session._session.headers["authorization"]
 
     def _get_quiz(self, quiz_id):
         # self.session._headers.update(
