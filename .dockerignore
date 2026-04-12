@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Runtime output
+out_dir/
+output/
+logs/
+saved/
+temp/
+
+# Sensitive files — mount these as volumes at runtime instead
+wvkeys/*.wvd
+cookies.txt
+keyfile.json
+.env
+
+# Local dev
+.vscode/
+.idea/
+.claude/
+*.png

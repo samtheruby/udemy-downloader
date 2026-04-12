@@ -6,7 +6,9 @@ services:
       dockerfile: Dockerfile
     volumes:
       - ./output:/app/out_dir:rw
-      - ./keyfile.json:/app/keyfile.json:ro
+      - ./keyfile.json:/app/keyfile.json:rw
+      - ./wvkeys:/app/wvkeys:ro
+      - ./cookies.txt:/app/cookies.txt:ro
     env_file:
       - .env
     command: python main.py -c $COURSE_URL

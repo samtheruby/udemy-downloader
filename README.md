@@ -1,234 +1,212 @@
 # Udemy Downloader with DRM support
 
 [![forthebadge](https://forthebadge.com/images/badges/built-with-love.svg)](https://forthebadge.com)
-[![forthebadge](https://forthebadge.com/images/badges/designed-in-ms-paint.svg)](https://forthebadge.com)
 [![forthebadge](https://forthebadge.com/images/badges/made-with-python.svg)](https://forthebadge.com)
-[![forthebadge](https://forthebadge.com/images/badges/approved-by-george-costanza.svg)](https://forthebadge.com)
-![GitHub forks](https://img.shields.io/github/forks/Puyodead1/udemy-downloader?style=for-the-badge)
-![GitHub Repo stars](https://img.shields.io/github/stars/Puyodead1/udemy-downloader?style=for-the-badge)
-![GitHub](https://img.shields.io/github/license/Puyodead1/udemy-downloader?style=for-the-badge)
+![GitHub forks](https://img.shields.io/github/forks/samtheruby/udemy-downloader?style=for-the-badge)
+![GitHub Repo stars](https://img.shields.io/github/stars/samtheruby/udemy-downloader?style=for-the-badge)
+![GitHub](https://img.shields.io/github/license/samtheruby/udemy-downloader?style=for-the-badge)
 
-# NOTE
-
--   **This tool will not work without decryption keys. Do not bother installing unless you already have keys or can obtain them!**
--   If you ask about keys in the issues, your message will be deleted and you will be blocked.
--   **Downloading courses is against Udemy's Terms of Service, I am NOT held responsible for your account getting suspended as a result from the use of this program!**
--   This program is WIP, the code is provided as-is and I am not held resposible for any legal issues resulting from the use of this program.
+> [!IMPORTANT]
+> Downloading courses is against Udemy's Terms of Service. Use at your own risk — the authors are not responsible for account suspensions or any legal issues resulting from use of this program.
 
 # Description
 
-Utility script to download Udemy courses, has support for DRM videos but requires the user to acquire the decryption key (for legal reasons).<br>
-Windows is the primary development OS, but I've made an effort to support Linux also (Mac untested).
+Downloads Udemy courses including Widevine DRM-protected videos. DRM keys are acquired automatically at download time using a Widevine L3 device file (`.wvd`) — no manual key extraction required.
 
-> [!IMPORTANT]  
-> This tool will not work on encrypted courses without decryption keys being provided!
->
-> Downloading courses is against Udemy's Terms of Service, I am NOT held responsible for your account getting suspended as a result from the use of this program!
->
-> This program is WIP, the code is provided as-is and I am not held resposible for any legal issues resulting from the use of this program.
+Fork of [Puyodead1/udemy-downloader](https://github.com/Puyodead1/udemy-downloader) with the following additions:
+- **Automatic Widevine key fetching** via pywidevine + WVD device files
+- **WVD device rotation** — place multiple `.wvd` files in `wvkeys/` and they are used round-robin
+- **Parallel lecture downloads** per chapter (`--parallel-lectures`)
+- **MKV output** with embedded subtitle tracks (`--use-mkv`)
+- **Subtitle export** to an organized directory for AI summarization (`--keep-subtitles`)
+- **Thread-safe logging** — clean output even during parallel downloads
+- **Enterprise portal support** — works with custom Udemy portals (e.g. `company.udemy.com`) via cookie-based auth
 
 # Requirements
 
-The following are a list of required third-party tools, you will need to ensure they are in your systems path and that typing their name in a terminal invokes them.
+### System tools (must be in PATH)
 
-> [!NOTE]  
-> These are seperate requirements that are not installed with the pip command!
->
-> You will need to download and install these manually!
+| Tool | Purpose | Install |
+|------|---------|---------|
+| [Python 3.12+](https://python.org/) | Runtime | — |
+| [ffmpeg](https://github.com/yt-dlp/FFmpeg-Builds/releases/tag/latest) | Muxing | `apt install ffmpeg` or download |
+| [aria2](https://github.com/aria2/aria2/) | Segment downloading | `apt install aria2` |
+| [MKVToolNix](https://mkvtoolnix.download/) | MKV muxing (optional, for `--use-mkv`) | `apt install mkvtoolnix` |
 
--   [Python 3](https://python.org/)
--   [ffmpeg](https://www.ffmpeg.org/) - This tool is also available in Linux package repositories.
-    -   NOTE: It is recommended to use a custom build from the yt-dlp team that contains various patches for issues when used alongside yt-dlp, however it is not required. Latest builds can be found [here](https://github.com/yt-dlp/FFmpeg-Builds/releases/tag/latest)
--   [aria2/aria2c](https://github.com/aria2/aria2/) - This tool is also available in Linux package repositories
--   [shaka-packager](https://github.com/shaka-project/shaka-packager/releases/latest)
--   [yt-dlp](https://github.com/yt-dlp/yt-dlp/) - This tool is also available in Linux package repositories, but can also be installed using pip if desired (`pip install yt-dlp`)
+### Python packages
+
+```
+pip install -r requirements.txt
+```
+
+# Setup
+
+## 1. Widevine device files (required for DRM courses)
+
+Obtain one or more Widevine L3 `.wvd` device files using [KeyDive](https://github.com/hyugogirubato/KeyDive) on an Android emulator:
+
+```bash
+# Install KeyDive in its own venv (avoids dependency conflicts)
+python -m venv C:\keydive-env
+C:\keydive-env\Scripts\pip install keydive
+
+# Start your Android Studio AVD (API 33, Google APIs — NOT Google Play)
+# Push and start frida-server, then:
+C:\keydive-env\Scripts\keydive -kw -a player
+# In the emulator: tap Provision Widevine → Refresh → Test DRM Playback
+```
+
+Place the resulting `.wvd` files in the `wvkeys/` directory (any filename works):
+
+```
+wvkeys/
+  google_sdk_gphone64_x86_64_17.0.0_abc123_l3.wvd
+  google_sdk_gphone64_x86_64_17.0.0_def456_l3.wvd
+```
+
+Keys fetched during downloads are cached in `keyfile.json` automatically.
+
+## 2. Authentication
+
+### Bearer token (standard Udemy accounts)
+
+Get your Bearer token from browser DevTools (Network tab → any `api-2.0` request → `Authorization: Bearer ...` header).
+
+Store it in `.env` (copy `.env.sample` → `.env`) or pass via `-b`.
+
+### Browser cookies (enterprise / subscription accounts)
+
+Export cookies from your browser in Netscape format to `cookies.txt`, then use `--browser file`.
+
+For Chrome/Brave (app-bound encryption blocks automatic extraction), use a browser extension like [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc).
+
+## 3. Environment file
+
+```bash
+cp .env.sample .env
+# Edit .env and set UDEMY_BEARER if using bearer token auth
+```
 
 # Usage
 
-You will need to get a few things before you can use this program:
-
--   Decryption Key ID
--   Decryption Key
--   Udemy Course URL
--   Udemy Bearer Token (aka acccess token for udemy-dl users)
--   Udemy cookies (only required for subscription plans - see [Udemy Subscription Plans](#udemy-subscription-plans))
-
-## Setting up
-
--   rename `.env.sample` to `.env` _(you only need to do this if you plan to use the .env file to store your bearer token)_
--   rename `keyfile.example.json` to `keyfile.json`
-
-## Acquire Bearer Token
-
--   Firefox: [Udemy-DL Guide](https://github.com/r0oth3x49/udemy-dl/issues/389#issuecomment-491903900)
--   Chrome: [Udemy-DL Guide](https://github.com/r0oth3x49/udemy-dl/issues/389#issuecomment-492569372)
--   If you want to use the .env file to store your Bearer Token, edit the .env and add your token.
-
-## Key ID and Key
-
-> [!IMPORTANT]  
-> For courses that are encrypted, It is up to you to acquire the decryption keys.
->
-> Please **DO NOT** ask me for help acquiring these!
-
--   Enter the key and key id in the `keyfile.json`
--   ![keyfile example](https://i.imgur.com/e5aU0ng.png)
--   ![example key and kid from console](https://i.imgur.com/awgndZA.png)
-
-## Cookies
-
-> [!TIP]
-> Cookies are not required for individually purchased courses.
-
-To download a course included in a subscription plan that you did not purchase individually, you will need to use cookies. You can also use cookies as an alternative to Bearer Tokens.
-
-The program can automatically extract them from your browser. You can specify what browser to extract cookies from with the `--browser` argument. Supported browsers are:
-
--   `chrome`
--   `firefox`
--   `opera`
--   `edge`
--   `brave`
--   `chromium`
--   `vivaldi`
--   `safari`
-
-## Ready to go
-
-You can now run the program, see the examples below. The course will download to `out_dir`.
-
-# Advanced Usage
-
 ```
-usage: main.py [-h] -c COURSE_URL [-b BEARER_TOKEN] [-q QUALITY] [-l LANG] [-cd CONCURRENT_DOWNLOADS] [--skip-lectures] [--download-assets]
-               [--download-captions] [--download-quizzes] [--keep-vtt] [--skip-hls] [--info] [--id-as-course-name] [-sc] [--save-to-file] [--load-from-file]
-               [--log-level LOG_LEVEL] [--browser {chrome,firefox,opera,edge,brave,chromium,vivaldi,safari}] [--use-h265] [--h265-crf H265_CRF] [--h265-preset H265_PRESET]
-               [--use-nvenc] [--out OUT] [--continue-lecture-numbers]
-               [--chapter CHAPTER_FILTER_RAW]
-
-Udemy Downloader
-
-options:
-  -h, --help            show this help message and exit
-  -c COURSE_URL, --course-url COURSE_URL
-                        The URL of the course to download
-  -b BEARER_TOKEN, --bearer BEARER_TOKEN
-                        The Bearer token to use
-  -q QUALITY, --quality QUALITY
-                        Download specific video quality. If the requested quality isn't available, the closest quality will be used. If not specified, the best quality will be
-                        downloaded for each lecture
-  -l LANG, --lang LANG  The language to download for captions, specify 'all' to download all captions (Default is 'en')
-  -cd CONCURRENT_DOWNLOADS, --concurrent-downloads CONCURRENT_DOWNLOADS
-                        The number of maximum concurrent downloads for segments (HLS and DASH, must be a number 1-30)
-  --skip-lectures       If specified, lectures won't be downloaded
-  --download-assets     If specified, lecture assets will be downloaded
-  --download-captions   If specified, captions will be downloaded
-  --download-quizzes    If specified, quizzes will be downloaded
-  --keep-vtt            If specified, .vtt files won't be removed
-  --skip-hls            If specified, hls streams will be skipped (faster fetching) (hls streams usually contain 1080p quality for non-drm lectures)
-  --info                If specified, only course information will be printed, nothing will be downloaded
-  --id-as-course-name   If specified, the course id will be used in place of the course name for the output directory. This is a 'hack' to reduce the path length
-  -sc, --subscription-course
-                        Mark the course as a subscription based course, use this if you are having problems with the program auto detecting it
-  --save-to-file        If specified, course content will be saved to a file that can be loaded later with --load-from-file, this can reduce processing time (Note that asset
-                        links expire after a certain amount of time)
-  --load-from-file      If specified, course content will be loaded from a previously saved file with --save-to-file, this can reduce processing time (Note that asset links
-                        expire after a certain amount of time)
-  --log-level LOG_LEVEL
-                        Logging level: one of DEBUG, INFO, ERROR, WARNING, CRITICAL (Default is INFO)
-  --browser {chrome,firefox,opera,edge,brave,chromium,vivaldi,safari}
-                        The browser to extract cookies from
-  --use-h265            If specified, videos will be encoded with the H.265 codec
-  --h265-crf H265_CRF   Set a custom CRF value for H.265 encoding. FFMPEG default is 28
-  --h265-preset H265_PRESET
-                        Set a custom preset value for H.265 encoding. FFMPEG default is medium
-  --use-nvenc           Whether to use the NVIDIA hardware transcoding for H.265. Only works if you have a supported NVIDIA GPU and ffmpeg with nvenc support
-  --out OUT, -o OUT     Set the path to the output directory
-  --continue-lecture-numbers, -n
-                        Use continuous lecture numbering instead of per-chapter
-  --chapter CHAPTER_FILTER_RAW
-                        Download specific chapters. Use comma separated values and ranges (e.g., '1,3-5,7,9-11')
+python main.py -c <COURSE_URL> [options]
 ```
 
--   Passing a Bearer Token and Course ID as an argument
-    -   `python main.py -c <Course URL> -b <Bearer Token>`
-    -   `python main.py -c https://www.udemy.com/courses/myawesomecourse -b <Bearer Token>`
--   Download a specific quality
-    -   `python main.py -c <Course URL> -q 720`
--   Download assets along with lectures
-    -   `python main.py -c <Course URL> --download-assets`
--   Download assets and specify a quality
-    -   `python main.py -c <Course URL> -q 360 --download-assets`
--   Download captions (Defaults to English)
-    -   `python main.py -c <Course URL> --download-captions`
--   Download captions with specific language
-    -   `python main.py -c <Course URL> --download-captions -l en` - English subtitles
-    -   `python main.py -c <Course URL> --download-captions -l es` - Spanish subtitles
-    -   `python main.py -c <Course URL> --download-captions -l it` - Italian subtitles
-    -   `python main.py -c <Course URL> --download-captions -l pl` - Polish Subtitles
-    -   `python main.py -c <Course URL> --download-captions -l all` - Downloads all subtitles
-    -   etc
--   Skip downloading lecture videos
-    -   `python main.py -c <Course URL> --skip-lectures --download-captions` - Downloads only captions
-    -   `python main.py -c <Course URL> --skip-lectures --download-assets` - Downloads only assets
--   Keep .VTT caption files:
-    -   `python main.py -c <Course URL> --download-captions --keep-vtt`
--   Skip parsing HLS Streams (HLS streams usually contain 1080p quality for Non-DRM lectures):
-    -   `python main.py -c <Course URL> --skip-hls`
--   Print course information only:
-    -   `python main.py -c <Course URL> --info`
--   Specify max number of concurrent downloads:
-    -   `python main.py -c <Course URL> --concurrent-downloads 20`
-    -   `python main.py -c <Course URL> -cd 20`
--   Cache course information:
-    -   `python main.py -c <Course URL> --save-to-file`
--   Load course cache:
-    -   `python main.py -c <Course URL> --load-from-file`
--   Change logging level:
-    -   `python main.py -c <Course URL> --log-level DEBUG`
-    -   `python main.py -c <Course URL> --log-level WARNING`
-    -   `python main.py -c <Course URL> --log-level INFO`
-    -   `python main.py -c <Course URL> --log-level CRITICAL`
--   Use course ID as the course name:
-    -   `python main.py -c <Course URL> --id-as-course-name`
--   Encode in H.265:
-    -   `python main.py -c <Course URL> --use-h265`
--   Encode in H.265 with custom CRF:
-    -   `python main.py -c <Course URL> --use-h265 -h265-crf 20`
--   Encode in H.265 with custom preset:
-    -   `python main.py -c <Course URL> --use-h265 --h265-preset faster`
--   Encode in H.265 using NVIDIA hardware transcoding:
-    -   `python main.py -c <Course URL> --use-h265 --use-nvenc`
--   Use continuous numbering (don't restart at 1 in every chapter):
-    -   `python main.py -c <Course URL> --continue-lecture-numbers`
-    -   `python main.py -c <Course URL> -n`
--   Download specific chapters:
-    - `python main.py -c <Course URL> --chapter "1,3,5"` - Downloads chapters 1, 3, and 5
-    - `python main.py -c <Course URL> --chapter "1-5"` - Downloads chapters 1 through 5
-    - `python main.py -c <Course URL> --chapter "1,3-5,7,9-11"` - Downloads chapters 1, 3 through 5, 7, and 9 through 11
--   Download specific chapters with quality:
-    - `python main.py -c <Course URL> --chapter "1-3" -q 720`
--   Download specific chapters with captions:
-    - `python main.py -c <Course URL> --chapter "1,3" --download-captions`
+### Authentication options
 
-# Support
+```
+-b, --bearer TOKEN          Bearer token
+--browser {chrome,firefox,opera,edge,brave,chromium,vivaldi,safari,file}
+                            Extract cookies from browser (use 'file' for cookies.txt)
+```
 
-if you want help using the program, join my [Discord](https://discord.gg/tMzrSxQ) server or use [GitHub Issues](https://github.com/Puyodead1/udemy-downloader/issues)
+### Download options
+
+```
+-q, --quality INT           Video quality (closest match used if unavailable)
+-l, --lang LANG             Caption language, or 'all' (default: en)
+-cd, --concurrent-downloads INT
+                            Segments downloaded in parallel per lecture (1-30, default 10)
+-pl, --parallel-lectures INT
+                            Lectures downloaded in parallel per chapter (1-5, default 1)
+--download-assets           Download lecture assets
+--download-captions         Download captions
+--download-quizzes          Download quizzes
+--skip-lectures             Skip video lectures (useful with --download-captions)
+--skip-hls                  Skip HLS streams (faster info fetching)
+```
+
+### Output options
+
+```
+--use-mkv                   Output MKV with subtitle tracks embedded (requires mkvmerge)
+--keep-subtitles            Copy subtitles to out_dir/subtitles/{course}/{lang}/{chapter}/
+--keep-vtt                  Keep original .vtt files alongside .srt
+-o, --out PATH              Custom output directory (default: out_dir/)
+--id-as-course-name         Use course ID instead of title for the output folder
+-n, --continue-lecture-numbers
+                            Use continuous lecture numbering across chapters
+```
+
+### Filtering
+
+```
+--chapter CHAPTERS          Download specific chapters e.g. "1,3-5,7"
+```
+
+### Performance / encoding
+
+```
+--use-h265                  Re-encode to H.265 (smaller files, slower)
+--h265-crf INT              H.265 CRF value (default 28)
+--h265-preset PRESET        H.265 preset (default medium)
+--use-nvenc                 Use NVIDIA GPU for H.265 encoding
+```
+
+### Misc
+
+```
+--info                      Print course info without downloading
+--save-to-file              Cache course structure to disk
+--load-from-file            Load course structure from cache (skips API fetch)
+--log-level LEVEL           DEBUG / INFO / WARNING / ERROR / CRITICAL (default INFO)
+```
+
+## Examples
+
+```bash
+# Standard download — best quality, English captions, MKV output
+python main.py -c https://www.udemy.com/course/my-course/ -b <token> \
+  --download-captions --use-mkv -q 1080
+
+# Enterprise portal with cookie auth, parallel downloads, subtitle export
+python main.py -c https://company.udemy.com/course/my-course/ \
+  --browser file -q 1080 --download-captions --use-mkv \
+  --keep-subtitles --parallel-lectures 3
+
+# Download only captions (no video)
+python main.py -c <URL> -b <token> --skip-lectures --download-captions -l all
+
+# Specific chapters only
+python main.py -c <URL> -b <token> --chapter "1,3-5,8"
+
+# Use cached course structure on re-run
+python main.py -c <URL> -b <token> --save-to-file   # first run
+python main.py -c <URL> -b <token> --load-from-file  # subsequent runs
+```
+
+# Docker
+
+Mount your sensitive files as volumes — they are excluded from the image by `.dockerignore`.
+
+```bash
+# Build
+docker compose build
+
+# Run
+COURSE_URL=https://www.udemy.com/course/my-course/ docker compose run udemy-downloader \
+  python main.py -c $COURSE_URL -b <token> --download-captions --use-mkv -q 1080
+```
+
+**Required volumes** (configured in `docker-compose.yml`):
+
+| Host path | Container path | Purpose |
+|-----------|---------------|---------|
+| `./output/` | `/app/out_dir/` | Downloaded files |
+| `./wvkeys/` | `/app/wvkeys/` | Widevine device files |
+| `./cookies.txt` | `/app/cookies.txt` | Browser cookies (if using `--browser file`) |
+| `./keyfile.json` | `/app/keyfile.json` | Key cache (auto-written, pre-create as `{}`) |
 
 # Credits
 
--   https://github.com/Jayapraveen/Drm-Dash-stream-downloader - For the original code which this is based on
--   https://github.com/alastairmccormack/pywvpssh - For code related to PSSH extraction
--   https://github.com/alastairmccormack/pymp4parse - For code related to mp4 box parsing (used by pywvpssh)
--   https://github.com/lbrayner/vtt-to-srt - For code related to converting subtitles from vtt to srt format
--   https://github.com/r0oth3x49/udemy-dl - For some of the informaton related to using the udemy api
+- [Puyodead1/udemy-downloader](https://github.com/Puyodead1/udemy-downloader) — upstream project
+- [hyugogirubato/KeyDive](https://github.com/hyugogirubato/KeyDive) — Widevine CDM extraction
+- [alastairmccormack/pywvpssh](https://github.com/alastairmccormack/pywvpssh) — PSSH extraction
+- [alastairmccormack/pymp4parse](https://github.com/alastairmccormack/pymp4parse) — MP4 box parsing
+- [lbrayner/vtt-to-srt](https://github.com/lbrayner/vtt-to-srt) — VTT to SRT conversion
+- [r0oth3x49/udemy-dl](https://github.com/r0oth3x49/udemy-dl) — Udemy API reference
 
 ## License
 
-All code is licensed under the MIT license
-
-## and finally, donations!
-
-Woo, you made it this far!
-
-I spend a lot of time coding things, and almost all of them are for nothing in return. When theres a lot of use of a program I make, I try to keep it updated, fix bugs, and even implement new features! But after a while, I do run out of motivation to keep doing it. If you like my work, and can help me out even a little, it would really help me out. If you are interested, you can find all the available options [here](https://github.com/Puyodead1/#supporting-me). Even if you don't, thank you anyways!
+MIT

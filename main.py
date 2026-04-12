@@ -1641,10 +1641,10 @@ def check_for_ffmpeg():
         return True
 
 
-def check_for_shaka():
+def check_for_mkvmerge():
     try:
         subprocess.Popen(
-            ["shaka-packager", "-version"],
+            ["mkvmerge", "--version"],
             stderr=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
         ).wait()
@@ -1652,9 +1652,6 @@ def check_for_shaka():
     except FileNotFoundError:
         return False
     except Exception:
-        logger.exception(
-            "> Unexpected exception while checking for shaka-packager, please tell the program author about this! "
-        )
         return True
 
 
@@ -2246,9 +2243,8 @@ def main():
         logger.fatal("> FFMPEG is missing from your system or path!")
         sys.exit(1)
 
-    shaka_ret_val = check_for_shaka()
-    if not shaka_ret_val and not skip_lectures:
-        logger.fatal("> Shaka Packager is missing from your system or path!")
+    if use_mkv and not check_for_mkvmerge():
+        logger.fatal("> mkvmerge (MKVToolNix) is missing but --use-mkv was specified. Install MKVToolNix and ensure mkvmerge is in your PATH.")
         sys.exit(1)
 
     if load_from_file:

@@ -1,11 +1,8 @@
-# Credit to anthelinux for the updated file (https://github.com/Puyodead1/udemy-downloader/issues/256#issuecomment-2536394478)
-# Use an official Python runtime as a parent image
 FROM python:3.12-slim-bullseye
 
-# Set the working directory in the container to /app
 WORKDIR /app
 
-# Install necessary packages
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
     wget \
@@ -13,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     unzip \
     xz-utils \
     jq \
+    mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
 # Install FFmpeg from johnvansickle's builds (always latest stable version)
@@ -24,14 +22,8 @@ RUN wget https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.t
     && chmod +x /usr/local/bin/ffmpeg \
     && chmod +x /usr/local/bin/ffprobe
 
-# Install Shaka Packager (latest version)
-RUN LATEST_TAG=$(curl -s https://api.github.com/repos/shaka-project/shaka-packager/releases/latest | jq -r .tag_name) && \
-    wget https://github.com/shaka-project/shaka-packager/releases/download/$LATEST_TAG/packager-linux-x64 -O /usr/local/bin/shaka-packager && \
-    chmod +x /usr/local/bin/shaka-packager && \
-    echo "Shaka Packager version $LATEST_TAG installed."
-
-# Copy the current directory contents into the container at /app
+# Copy application files
 COPY . /app
 
-# Install Python application dependencies
-RUN pip install -r requirements.txt
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
