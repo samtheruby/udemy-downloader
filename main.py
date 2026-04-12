@@ -67,6 +67,8 @@ cj = None
 use_continuous_lecture_numbers = False
 chapter_filter = None
 parallel_lectures = 1
+use_mkv = False
+keep_subtitles = False
 _udemy_instance = None  # set in parse_new so _process_one_lecture threads can access it
 
 
@@ -106,7 +108,7 @@ def parse_chapter_filter(chapter_str: str):
 
 # this is the first function that is called, we parse the arguments, setup the logger, and ensure that required directories exist
 def pre_run():
-    global dl_assets, dl_captions, dl_quizzes, skip_lectures, caption_locale, quality, bearer_token, course_name, keep_vtt, skip_hls, concurrent_downloads, load_from_file, save_to_file, bearer_token, course_url, info, logger, keys, id_as_course_name, LOG_LEVEL, use_h265, h265_crf, h265_preset, use_nvenc, browser, is_subscription_course, DOWNLOAD_DIR, use_continuous_lecture_numbers, chapter_filter, parallel_lectures
+    global dl_assets, dl_captions, dl_quizzes, skip_lectures, caption_locale, quality, bearer_token, course_name, keep_vtt, skip_hls, concurrent_downloads, load_from_file, save_to_file, bearer_token, course_url, info, logger, keys, id_as_course_name, LOG_LEVEL, use_h265, h265_crf, h265_preset, use_nvenc, browser, is_subscription_course, DOWNLOAD_DIR, use_continuous_lecture_numbers, chapter_filter, parallel_lectures, use_mkv, keep_subtitles
 
     # make sure the logs directory exists
     if not os.path.exists(LOG_DIR_PATH):
@@ -156,6 +158,18 @@ def pre_run():
         type=int,
         default=1,
         help="Number of lectures to download in parallel per chapter (default 1, max 5)",
+    )
+    parser.add_argument(
+        "--use-mkv",
+        dest="use_mkv",
+        action="store_true",
+        help="Output MKV instead of MP4, with all downloaded subtitles embedded as tracks",
+    )
+    parser.add_argument(
+        "--keep-subtitles",
+        dest="keep_subtitles",
+        action="store_true",
+        help="Copy all subtitles to out_dir/subtitles/{course}/{language}/{chapter}/ for easy AI summarization",
     )
     parser.add_argument(
         "--skip-lectures",
@@ -363,6 +377,10 @@ def pre_run():
     if args.use_continuous_lecture_numbers:
         use_continuous_lecture_numbers = args.use_continuous_lecture_numbers
     parallel_lectures = max(1, min(5, args.parallel_lectures))
+    if args.use_mkv:
+        use_mkv = True
+    if args.keep_subtitles:
+        keep_subtitles = True
 
     # setup a logger
     logging.root.setLevel(LOG_LEVEL)
@@ -1589,6 +1607,9 @@ def process_caption(caption, lecture_title, lecture_dir, tries=0):
             except Exception:
                 logger.exception(f"    > Error converting caption")
 
+    srt_path = os.path.join(lecture_dir, filename_no_ext + ".srt")
+    return srt_path if os.path.isfile(srt_path) else None
+
 
 def process_lecture(lecture, lecture_path, chapter_dir):
     lecture_id = lecture.get("id")
@@ -1810,13 +1831,42 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
                 process_lecture(parsed_lecture, lecture_path, chapter_dir)
 
     # download subtitles for this lecture
+    is_video = extension == "mp4"
     subtitles = parsed_lecture.get("subtitles")
+    downloaded_srt_paths = []  # [(lang, path)] collected for MKV embedding
     if dl_captions and subtitles is not None and lecture_extension is None:
         logger.info("Processing {} caption(s)...".format(len(subtitles)))
         for subtitle in subtitles:
             lang = subtitle.get("language")
             if lang == caption_locale or caption_locale == "all":
-                process_caption(subtitle, lecture_title, chapter_dir)
+                srt_path = process_caption(subtitle, lecture_title, chapter_dir)
+                if srt_path and os.path.isfile(srt_path):
+                    downloaded_srt_paths.append((lang, srt_path))
+                    if keep_subtitles:
+                        import shutil
+                        chapter_name = os.path.basename(chapter_dir)
+                        course_dir_name = os.path.basename(os.path.dirname(chapter_dir))
+                        sub_dir = os.path.join(DOWNLOAD_DIR, "subtitles", course_dir_name, lang, chapter_name)
+                        os.makedirs(sub_dir, exist_ok=True)
+                        dest = os.path.join(sub_dir, os.path.basename(srt_path))
+                        if not os.path.isfile(dest):
+                            shutil.copy2(srt_path, dest)
+
+    # mux into MKV with embedded subtitle tracks if requested
+    if use_mkv and is_video:
+        final_path = lecture_path.replace(".mp4", ".mkv")
+        if os.path.isfile(lecture_path) and not os.path.isfile(final_path):
+            mkv_args = ["mkvmerge", "-q", "-o", final_path, "--title", lecture_title, lecture_path]
+            for lang, srt_path in downloaded_srt_paths:
+                mkv_args += ["--language", f"0:{lang}", "--track-name", f"0:{lang}", srt_path]
+            ret = subprocess.Popen(mkv_args).wait()
+            if ret == 0:
+                os.remove(lecture_path)
+                for _, srt_path in downloaded_srt_paths:
+                    try:
+                        os.remove(srt_path)
+                    except OSError:
+                        pass
 
     if dl_assets:
         assets = parsed_lecture.get("assets")
