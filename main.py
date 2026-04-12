@@ -438,8 +438,14 @@ class Udemy:
 
                 self.session._session.cookies.update(cj)
 
-            # remove the authentication header
-            del self.session._session.headers["authorization"]
+                # Strip Android-specific headers — enterprise portals (e.g. gale.udemy.com)
+                # reject API requests that carry both browser cookies and mobile client headers.
+                for h in ["authorization", "x-udemy-client-secret", "x-udemy-client-id",
+                          "x-mobile-visit-enabled", "x-version-name", "x-client-name"]:
+                    self.session._session.headers.pop(h, None)
+            else:
+                # remove the authentication header
+                del self.session._session.headers["authorization"]
 
     def _get_quiz(self, quiz_id):
         # self.session._headers.update(
