@@ -19,7 +19,7 @@ Fork of [Puyodead1/udemy-downloader](https://github.com/Puyodead1/udemy-download
 
 ## Step 1 — Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- Docker
 - A Widevine L3 `.wvd` device file (see note below)
 - Your Udemy course URL
 
