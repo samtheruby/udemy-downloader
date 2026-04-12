@@ -2,6 +2,9 @@
 import argparse
 import json
 import logging
+import logging.handlers as _log_handlers
+import queue as _queue
+import threading
 import math
 import os
 import re
@@ -351,8 +354,10 @@ def pre_run():
         use_continuous_lecture_numbers = args.use_continuous_lecture_numbers
 
     # setup a logger
-    logger = logging.getLogger(__name__)
     logging.root.setLevel(LOG_LEVEL)
+
+    # Thread-safe logging: all threads enqueue records; one listener writes them serially
+    _log_queue = _queue.Queue(-1)
 
     # create a colored formatter for the console
     console_formatter = ColoredFormatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
@@ -368,11 +373,16 @@ def pre_run():
     file_handler = logging.FileHandler(LOG_FILE_PATH)
     file_handler.setFormatter(file_formatter)
 
+    # QueueListener writes serially from the queue — no interleaving between threads
+    _listener = _log_handlers.QueueListener(_log_queue, stream, file_handler, respect_handler_level=True)
+    _listener.start()
+
     # construct the logger
     logger = logging.getLogger("udemy-downloader")
     logger.setLevel(LOG_LEVEL)
-    logger.addHandler(stream)
-    logger.addHandler(file_handler)
+    logger.handlers.clear()
+    logger.addHandler(_log_handlers.QueueHandler(_log_queue))
+    logger.propagate = False
 
     logger.info(f"Output directory set to {DOWNLOAD_DIR}")
 

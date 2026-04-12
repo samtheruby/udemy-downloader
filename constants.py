@@ -64,7 +64,7 @@ LOG_FILE_PATH = os.path.join(
     os.getcwd(), "logs", f"{time.strftime('%Y-%m-%d-%I-%M-%S')}.log"
 )
 LOG_FORMAT = (
-    "[%(asctime)s] [%(name)s] [%(funcName)s:%(lineno)d] %(levelname)s: %(message)s"
+    "[%(asctime)s] [%(threadName)s] [%(funcName)s:%(lineno)d] %(levelname)s: %(message)s"
 )
 LOG_DATE_FORMAT = "%I:%M:%S"
 LOG_LEVEL = logging.INFO
