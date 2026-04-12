@@ -11,4 +11,3 @@ services:
       - ./cookies.txt:/app/cookies.txt:ro
     env_file:
       - .env
-    command: python main.py -c $COURSE_URL
