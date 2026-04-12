@@ -39,7 +39,7 @@ mkdir -p output wvkeys
 echo '{}' > keyfile.json
 ```
 
-Place your `.wvd` file(s) in the `wvkeys/` folder — any filename is fine:
+Place your `.wvd` file(s) in the `wvkeys/` folder
 
 ```
 wvkeys/
@@ -52,7 +52,7 @@ wvkeys/
 
 Choose **one** of the following methods:
 
-### Option A — Bearer token (standard Udemy accounts)
+### Option A — Bearer token
 
 1. Open your browser and log in to Udemy
 2. Open DevTools (F12) → Network tab → filter for `api-2.0`
@@ -66,23 +66,13 @@ cp .env.sample .env
 # Open .env and set: UDEMY_BEARER=your_token_here
 ```
 
-### Option B — Cookies (enterprise portals / subscription accounts)
+### Option B — Cookies - REQUIRED FOR enterprise portals / subscription accounts
 
 1. Log in to your Udemy portal in your browser
 2. Export cookies in Netscape format to `cookies.txt` using the [Get cookies.txt LOCALLY](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) extension
 3. Place `cookies.txt` in the project folder
 
 Pass `--cookies` when running.
-
----
-
-## Step 4 — Build the Docker image
-
-```bash
-docker compose build
-```
-
-This only needs to be done once (and again after any code changes).
 
 ---
 
@@ -94,7 +84,6 @@ This only needs to be done once (and again after any code changes).
 docker compose run udemy-downloader python main.py \
   -c https://www.udemy.com/course/my-course/ \
   -b <your_token> \
-  -q 1080 \
   --download-captions \
   --use-mkv
 ```
@@ -105,7 +94,6 @@ docker compose run udemy-downloader python main.py \
 docker compose run udemy-downloader python main.py \
   -c https://company.udemy.com/course/my-course/ \
   --cookies \
-  -q 1080 \
   --download-captions \
   --use-mkv
 ```
