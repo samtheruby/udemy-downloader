@@ -15,13 +15,11 @@ from http.cookiejar import MozillaCookieJar
 from pathlib import Path
 from typing import IO, Union
 
-import browser_cookie3
 import demoji
 import m3u8
 import requests
 from curl_cffi import requests as requests2
 import yt_dlp
-from bs4 import BeautifulSoup
 from coloredlogs import ColoredFormatter
 from dotenv import load_dotenv
 from pathvalidate import sanitize_filename
@@ -62,7 +60,6 @@ h265_crf = 28
 h265_preset = "medium"
 use_nvenc = False
 browser = None
-cj = None
 use_continuous_lecture_numbers = False
 chapter_filter = None
 parallel_lectures = 1
@@ -278,20 +275,11 @@ def pre_run():
         help="Logging level: one of DEBUG, INFO, ERROR, WARNING, CRITICAL (Default is INFO)",
     )
     parser.add_argument(
-        "--browser",
+        "--cookies",
         dest="browser",
-        help="The browser to extract cookies from",
-        choices=[
-            "chrome",
-            "firefox",
-            "opera",
-            "edge",
-            "brave",
-            "chromium",
-            "vivaldi",
-            "safari",
-            "file",
-        ],
+        action="store_const",
+        const="file",
+        help="Load cookies from cookies.txt (Netscape format)",
     )
     parser.add_argument(
         "--use-h265",
@@ -485,34 +473,18 @@ class Udemy:
             else:
                 if browser == None:
                     logger.error(
-                        "No bearer token was provided, and no browser for cookie extraction was specified."
+                        "No bearer token provided and --cookies not specified. Pass -b <token> or --cookies."
                     )
                     sys.exit(1)
 
                 logger.warning(
-                    "No bearer token was provided, attempting to use browser cookies."
+                    "No bearer token provided, authenticating via cookies.txt."
                 )
 
                 self.session = self.auth._session
 
-                if browser == "chrome":
-                    cj = browser_cookie3.chrome(domain_name="udemy.com")
-                elif browser == "firefox":
-                    cj = browser_cookie3.firefox(domain_name="udemy.com")
-                elif browser == "opera":
-                    cj = browser_cookie3.opera(domain_name="udemy.com")
-                elif browser == "edge":
-                    cj = browser_cookie3.edge(domain_name="udemy.com")
-                elif browser == "brave":
-                    cj = browser_cookie3.brave(domain_name="udemy.com")
-                elif browser == "chromium":
-                    cj = browser_cookie3.chromium(domain_name="udemy.com")
-                elif browser == "vivaldi":
-                    cj = browser_cookie3.vivaldi(domain_name="udemy.com")
-                elif browser == "file":
-                    # load netscape cookies from file
-                    cj = MozillaCookieJar("cookies.txt")
-                    cj.load()
+                cj = MozillaCookieJar("cookies.txt")
+                cj.load()
 
                 self.session._session.cookies.update(cj)
 
@@ -1085,20 +1057,6 @@ class Udemy:
             results = webpage.get("results", [])
         return results
 
-    # def _extract_subscription_course_info(self, url):
-    #     course_html = self.session._get(url).text
-    #     soup = BeautifulSoup(course_html, "lxml")
-    #     data = soup.find("div", {"class": "ud-component--course-taking--app"})
-    #     if not data:
-    #         logger.fatal(
-    #             "Could not find course data. Possible causes are: Missing cookies.txt file, incorrect url (should end with /learn), not logged in to udemy in specified browser."
-    #         )
-    #         self.session.terminate()
-    #         sys.exit(1)
-    #     data_args = data.attrs["data-module-args"]
-    #     data_json = json.loads(data_args)
-    #     course_id = data_json.get("courseId", None)
-    #     return course_id
 
     def _extract_course_info(self, url):
         global portal_name

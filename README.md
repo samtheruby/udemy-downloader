@@ -49,9 +49,9 @@ Store it in `.env` (copy `.env.sample` → `.env`) or pass via `-b`.
 
 ### Browser cookies (enterprise / subscription accounts)
 
-Export cookies from your browser in Netscape format to `cookies.txt`, then use `--browser file`.
+Export cookies from your browser in Netscape format to `cookies.txt`, then pass `--cookies`.
 
-For Chrome/Brave (app-bound encryption blocks automatic extraction), use a browser extension like [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc).
+Use a browser extension such as [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) to export them.
 
 ## 3. Environment file
 
@@ -74,7 +74,7 @@ cd udemy-downloader
 # 2. Create required files
 mkdir -p output wvkeys
 echo '{}' > keyfile.json
-touch cookies.txt   # populate if using --browser file
+touch cookies.txt   # populate if using --cookies
 
 # 3. Copy your .wvd files into wvkeys/
 cp /path/to/your/device.wvd wvkeys/
@@ -100,7 +100,7 @@ docker compose run udemy-downloader python main.py \
 # Enterprise portal with cookie auth and parallel downloads
 docker compose run udemy-downloader python main.py \
   -c https://company.udemy.com/course/my-course/ \
-  --browser file -q 1080 --download-captions \
+  --cookies -q 1080 --download-captions \
   --use-mkv --keep-subtitles --parallel-lectures 3
 
 # Specific chapters only
@@ -118,7 +118,7 @@ docker compose run udemy-downloader python main.py \
 |-----------|---------------|---------|
 | `./output/` | `/app/out_dir/` | Downloaded files |
 | `./wvkeys/` | `/app/wvkeys/` | Widevine device files (read-only) |
-| `./cookies.txt` | `/app/cookies.txt` | Browser cookies for `--browser file` |
+| `./cookies.txt` | `/app/cookies.txt` | Browser cookies for `--cookies` |
 | `./keyfile.json` | `/app/keyfile.json` | Key cache (auto-written) |
 
 ## All options
@@ -126,8 +126,7 @@ docker compose run udemy-downloader python main.py \
 ```
 -c, --course-url URL        Course URL (required)
 -b, --bearer TOKEN          Bearer token
---browser {chrome,firefox,opera,edge,brave,chromium,vivaldi,safari,file}
-                            Cookie source (use 'file' for cookies.txt)
+--cookies                   Load cookies from cookies.txt (Netscape format)
 -q, --quality INT           Video quality (closest match used if unavailable)
 -l, --lang LANG             Caption language or 'all' (default: en)
 -cd, --concurrent-downloads INT   Segments in parallel per lecture (1-30, default 10)
