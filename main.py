@@ -55,7 +55,6 @@ save_to_file = None
 load_from_file = None
 course_url = None
 info = None
-keys = {}
 id_as_course_name = False
 is_subscription_course = False
 use_h265 = False
@@ -70,6 +69,40 @@ parallel_lectures = 1
 use_mkv = False
 keep_subtitles = False
 _udemy_instance = None  # set in parse_new so _process_one_lecture threads can access it
+
+keys = {}
+_keys_lock = threading.Lock()
+udemy_session = None  # shared session used for Widevine license requests
+
+WVD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "device.wvd")
+WVD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wvkeys")
+_wvd_files = []
+_wvd_index = 0
+_wvd_lock = threading.Lock()
+
+
+def _load_wvd_files():
+    """Scan wvkeys/ for .wvd files. Falls back to device.wvd if none found."""
+    global _wvd_files
+    import glob as _glob
+    found = sorted(_glob.glob(os.path.join(WVD_DIR, "*.wvd")))
+    if found:
+        _wvd_files = found
+    elif os.path.exists(WVD_PATH):
+        _wvd_files = [WVD_PATH]
+    else:
+        _wvd_files = []
+
+
+def _get_wvd_path():
+    """Return the next WVD file in round-robin order."""
+    global _wvd_index
+    if not _wvd_files:
+        return None
+    with _wvd_lock:
+        path = _wvd_files[_wvd_index % len(_wvd_files)]
+        _wvd_index += 1
+    return path
 
 
 def deEmojify(inputStr: str):
@@ -108,7 +141,7 @@ def parse_chapter_filter(chapter_str: str):
 
 # this is the first function that is called, we parse the arguments, setup the logger, and ensure that required directories exist
 def pre_run():
-    global dl_assets, dl_captions, dl_quizzes, skip_lectures, caption_locale, quality, bearer_token, course_name, keep_vtt, skip_hls, concurrent_downloads, load_from_file, save_to_file, bearer_token, course_url, info, logger, keys, id_as_course_name, LOG_LEVEL, use_h265, h265_crf, h265_preset, use_nvenc, browser, is_subscription_course, DOWNLOAD_DIR, use_continuous_lecture_numbers, chapter_filter, parallel_lectures, use_mkv, keep_subtitles
+    global dl_assets, dl_captions, dl_quizzes, skip_lectures, caption_locale, quality, bearer_token, course_name, keep_vtt, skip_hls, concurrent_downloads, load_from_file, save_to_file, bearer_token, course_url, info, logger, keys, id_as_course_name, LOG_LEVEL, use_h265, h265_crf, h265_preset, use_nvenc, browser, is_subscription_course, DOWNLOAD_DIR, use_continuous_lecture_numbers, chapter_filter, parallel_lectures, use_mkv, keep_subtitles, udemy_session
 
     # make sure the logs directory exists
     if not os.path.exists(LOG_DIR_PATH):
@@ -412,6 +445,12 @@ def pre_run():
     logger.handlers.clear()
     logger.addHandler(_log_handlers.QueueHandler(_log_queue))
     logger.propagate = False
+
+    _load_wvd_files()
+    if _wvd_files:
+        logger.info(f"> Loaded {len(_wvd_files)} WVD device(s) for key rotation: {[os.path.basename(p) for p in _wvd_files]}")
+    else:
+        logger.warning("> No WVD files found in wvkeys/ and no device.wvd fallback — DRM decryption will fail")
 
     logger.info(f"Output directory set to {DOWNLOAD_DIR}")
 
@@ -1179,6 +1218,7 @@ class Udemy:
                         "is_encrypted": True,
                         "asset_id": asset.get("id"),
                         "type": asset.get("asset_type"),
+                        "media_license_token": asset.get("media_license_token"),
                     }
 
                 else:
@@ -1351,7 +1391,113 @@ def mux_process(
     return ret_code
 
 
-def handle_segments(url, format_id, lecture_id, video_title, output_path, chapter_dir):
+def fetch_widevine_key(mpd_url, content_id, license_token=None):
+    """Fetch a Widevine content key automatically using pywidevine and a WVD device file.
+
+    Falls back to constructing the Udemy license URL from license_token when
+    the MPD does not embed a LaURL (which is the standard Udemy behaviour).
+    Keys are cached in keyfile.json and shared across threads via _keys_lock.
+    """
+    try:
+        import xml.etree.ElementTree as ET
+        from pywidevine.cdm import Cdm
+        from pywidevine.device import Device
+        from pywidevine.pssh import PSSH
+    except ImportError:
+        logger.error("> pywidevine not installed. Run: pip install pywidevine")
+        return None
+
+    wvd_path = _get_wvd_path()
+    if not wvd_path:
+        logger.error("> No WVD files available. Add .wvd files to the wvkeys/ folder.")
+        return None
+    logger.info(f"> Using WVD: {os.path.basename(wvd_path)}")
+
+    try:
+        mpd_resp = udemy_session._get(mpd_url)
+        if not mpd_resp.ok:
+            logger.error(f"> Failed to fetch MPD: {mpd_resp.status_code}")
+            return None
+
+        root = ET.fromstring(mpd_resp.text)
+        WV_SYSTEM_ID = "urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"
+
+        pssh_b64 = None
+        license_url = None
+
+        for elem in root.iter():
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if tag == "ContentProtection":
+                if elem.get("schemeIdUri", "").lower() == WV_SYSTEM_ID.lower():
+                    for child in elem:
+                        child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                        if child_tag.lower() in ("laurl", "licenseurl"):
+                            license_url = child.text
+                        elif child_tag.lower() == "pssh":
+                            pssh_b64 = child.text
+
+        if not pssh_b64:
+            logger.error("> No Widevine PSSH found in MPD")
+            return None
+        if not license_url:
+            if license_token:
+                license_url = (
+                    f"https://{portal_name}.udemy.com/api-2.0/media-license-server/"
+                    f"validate-auth-token/?drm_type=widevine&auth_token={license_token}"
+                )
+                logger.info("> No license URL in MPD, using token-based URL")
+            else:
+                logger.error("> No license URL found in MPD and no license token provided")
+                return None
+
+        logger.info(f"> Requesting Widevine license from: {license_url}")
+
+        device = Device.load(wvd_path)
+        cdm = Cdm.from_device(device)
+        cdm_session = cdm.open()
+
+        pssh = PSSH(pssh_b64)
+        challenge = cdm.get_license_challenge(cdm_session, pssh)
+
+        lic_resp = udemy_session._session.post(
+            license_url,
+            data=challenge,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+        if not lic_resp.ok:
+            logger.error(f"> License request failed: {lic_resp.status_code}")
+            cdm.close(cdm_session)
+            return None
+
+        cdm.parse_license(cdm_session, lic_resp.content)
+
+        content_key = None
+        for key in cdm.get_keys(cdm_session):
+            if key.type == "CONTENT":
+                content_key = key.key.hex()
+                break
+
+        cdm.close(cdm_session)
+
+        if not content_key:
+            logger.error("> No CONTENT key returned from license server")
+            return None
+
+        logger.info(f"> Successfully fetched key for {content_id}")
+        with _keys_lock:
+            keys[content_id] = content_key
+            with open(KEY_FILE_PATH, "w") as f:
+                json.dump(keys, f, indent=4)
+
+        return content_key
+
+    except Exception as e:
+        logger.error(f"> Error fetching Widevine key: {e}")
+        return None
+
+
+def handle_segments(url, format_id, lecture_id, video_title, output_path, chapter_dir, license_token=None):
     video_filepath_enc = os.path.join(chapter_dir, lecture_id + ".encrypted.mp4")
     audio_filepath_enc = os.path.join(chapter_dir, lecture_id + ".encrypted.m4a")
     temp_output_path = os.path.join(chapter_dir, lecture_id + ".mp4")
@@ -1407,22 +1553,22 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
     video_key = None
 
     if audio_kid is not None:
-        try:
-            audio_key = keys[audio_kid]
-        except KeyError:
-            logger.error(
-                f"Audio key not found for {audio_kid}, if you have the key then you probably didn't add them to the key file correctly."
-            )
-            return
+        if audio_kid not in keys:
+            logger.info(f"> Key not in keyfile for {audio_kid}, attempting auto-fetch via Widevine...")
+            fetched = fetch_widevine_key(url, audio_kid, license_token=license_token)
+            if fetched is None:
+                logger.error(f"Audio key not found for {audio_kid} and auto-fetch failed.")
+                return
+        audio_key = keys.get(audio_kid)
 
     if video_kid is not None:
-        try:
-            video_key = keys[video_kid]
-        except KeyError:
-            logger.error(
-                f"Video key not found for {audio_kid}, if you have the key then you probably didn't add them to the key file correctly."
-            )
-            return
+        if video_kid not in keys:
+            logger.info(f"> Key not in keyfile for {video_kid}, attempting auto-fetch via Widevine...")
+            fetched = fetch_widevine_key(url, video_kid, license_token=license_token)
+            if fetched is None:
+                logger.error(f"Video key not found for {video_kid} and auto-fetch failed.")
+                return
+        video_key = keys.get(video_kid)
 
     try:
         # logger.info("> Decrypting video, this might take a minute...")
@@ -1616,6 +1762,7 @@ def process_lecture(lecture, lecture_path, chapter_dir):
     lecture_title = lecture.get("lecture_title")
     is_encrypted = lecture.get("is_encrypted")
     lecture_sources = lecture.get("video_sources")
+    media_license_token = lecture.get("media_license_token")
 
     if is_encrypted:
         if len(lecture_sources) > 0:
@@ -1634,6 +1781,7 @@ def process_lecture(lecture, lecture_path, chapter_dir):
                 lecture_title,
                 lecture_path,
                 chapter_dir,
+                license_token=media_license_token,
             )
         else:
             logger.info(f"      > Lecture '{lecture_title}' is missing media links")
@@ -2117,6 +2265,7 @@ def main():
         bearer_token = os.getenv("UDEMY_BEARER")
 
     udemy = Udemy(bearer_token)
+    udemy_session = udemy  # expose to fetch_widevine_key running in threads
     portal_name = udemy.extract_portal_name(course_url)
     visit_status = udemy.auth._session.visit(portal_name)
     if not visit_status:
