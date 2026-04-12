@@ -1424,17 +1424,21 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
         pssh = PSSH(pssh_b64)
         challenge = cdm.get_license_challenge(cdm_session, pssh)
 
+        lic_headers = {"Content-Type": "application/octet-stream"}
+        if bearer_token:
+            lic_headers["Authorization"] = f"Bearer {bearer_token}"
+
         if udemy_session is not None:
             lic_resp = udemy_session._session.post(
                 license_url,
                 data=challenge,
-                headers={"Content-Type": "application/octet-stream"},
+                headers=lic_headers,
             )
         else:
             lic_resp = _requests.post(
                 license_url,
                 data=challenge,
-                headers={"Content-Type": "application/octet-stream"},
+                headers=lic_headers,
                 timeout=120,
             )
 
