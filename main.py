@@ -1347,7 +1347,39 @@ def mux_process(
     return ret_code
 
 
-def fetch_widevine_key(mpd_url, content_id, license_token=None):
+def _jwt_user_agent(token):
+    """Return the user_agent claim from a JWT payload without verifying the signature."""
+    try:
+        import base64 as _b64, json as _j
+        payload = token.split('.')[1]
+        payload += '=' * (-len(payload) % 4)
+        return _j.loads(_b64.urlsafe_b64decode(payload)).get('user_agent')
+    except Exception:
+        return None
+
+
+def _refresh_license_token(asset_id):
+    """Re-fetch a fresh media_license_token for asset_id from the Udemy API."""
+    if udemy_session is None or not asset_id:
+        return None
+    url = (
+        f"https://{portal_name}.udemy.com/api-2.0/assets/{asset_id}/"
+        f"?fields[asset]=media_license_token"
+    )
+    try:
+        resp = udemy_session._get(url)
+        if resp.ok:
+            token = resp.json().get("media_license_token")
+            if token:
+                logger.info(f"> Refreshed license token for asset {asset_id}")
+                return token
+        logger.warning(f"> Failed to refresh license token: {resp.status_code}")
+    except Exception as e:
+        logger.debug(f"> Exception refreshing license token: {e}")
+    return None
+
+
+def fetch_widevine_key(mpd_url, content_id, license_token=None, asset_id=None):
     """Fetch a Widevine content key automatically using pywidevine and a WVD device file.
 
     Falls back to constructing the Udemy license URL from license_token when
@@ -1422,45 +1454,46 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
         pssh = PSSH(pssh_b64)
         challenge = cdm.get_license_challenge(cdm_session, pssh)
 
-        lic_headers = {"Content-Type": "application/octet-stream"}
-        if bearer_token:
-            lic_headers["Authorization"] = f"Bearer {bearer_token}"
+        def _build_lic_headers(token):
+            hdrs = {"Content-Type": "application/octet-stream"}
+            if bearer_token:
+                hdrs["Authorization"] = f"Bearer {bearer_token}"
+            # Mirror the user_agent embedded in the JWT — the license server
+            # validates it matches the request User-Agent header.
+            if token:
+                ua = _jwt_user_agent(token)
+                if ua:
+                    hdrs["User-Agent"] = ua
+                    logger.debug(f"> Using JWT user_agent for license request: {ua}")
+            return hdrs
 
-        # The media_license_token JWT embeds the user_agent of the client that
-        # originally fetched the course data.  Udemy's license server validates
-        # that the request User-Agent matches.  Decode the payload (no signature
-        # verification needed — we just want the claim) and mirror it exactly.
-        if license_token:
-            try:
-                import base64 as _base64, json as _json
-                _payload_b64 = license_token.split('.')[1]
-                _payload_b64 += '=' * (-len(_payload_b64) % 4)
-                _claims = _json.loads(_base64.urlsafe_b64decode(_payload_b64))
-                _jwt_ua = _claims.get('user_agent')
-                if _jwt_ua:
-                    lic_headers['User-Agent'] = _jwt_ua
-                    logger.debug(f"> Using JWT user_agent for license request: {_jwt_ua}")
-            except Exception as _e:
-                logger.debug(f"> Could not decode license_token JWT: {_e}")
+        def _post_license(url, hdrs):
+            if udemy_session is not None:
+                return udemy_session._session.post(url, data=challenge, headers=hdrs)
+            return _requests.post(url, data=challenge, headers=hdrs, timeout=120)
 
-        if udemy_session is not None:
-            lic_resp = udemy_session._session.post(
-                license_url,
-                data=challenge,
-                headers=lic_headers,
-            )
-        else:
-            lic_resp = _requests.post(
-                license_url,
-                data=challenge,
-                headers=lic_headers,
-                timeout=120,
-            )
+        lic_resp = _post_license(license_url, _build_lic_headers(license_token))
 
         if not lic_resp.ok:
-            logger.error(f"> License request failed: {lic_resp.status_code} — {lic_resp.text[:200]}")
-            cdm.close(cdm_session)
-            return None
+            body = lic_resp.text[:300]
+            logger.error(f"> License request failed: {lic_resp.status_code} — {body}")
+
+            # If the token expired mid-run, fetch a fresh one and retry once.
+            if lic_resp.status_code == 401 and "expired" in body.lower() and asset_id:
+                logger.info("> Token expired — fetching fresh token and retrying...")
+                fresh_token = _refresh_license_token(asset_id)
+                if fresh_token:
+                    license_url = (
+                        f"https://{portal_name}.udemy.com/api-2.0/media-license-server/"
+                        f"validate-auth-token/?drm_type=widevine&auth_token={fresh_token}"
+                    )
+                    lic_resp = _post_license(license_url, _build_lic_headers(fresh_token))
+                    if not lic_resp.ok:
+                        logger.error(f"> Retry failed: {lic_resp.status_code} — {lic_resp.text[:300]}")
+
+            if not lic_resp.ok:
+                cdm.close(cdm_session)
+                return None
 
         cdm.parse_license(cdm_session, lic_resp.content)
 
@@ -1489,7 +1522,7 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
         return None
 
 
-def handle_segments(url, format_id, lecture_id, video_title, output_path, chapter_dir, license_token=None):
+def handle_segments(url, format_id, lecture_id, video_title, output_path, chapter_dir, license_token=None, asset_id=None):
     video_filepath_enc = os.path.join(chapter_dir, lecture_id + ".encrypted.mp4")
     audio_filepath_enc = os.path.join(chapter_dir, lecture_id + ".encrypted.m4a")
     temp_output_path = os.path.join(chapter_dir, lecture_id + ".mp4")
@@ -1547,7 +1580,7 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
     if audio_kid is not None:
         if audio_kid not in keys:
             logger.info(f"> Key not in keyfile for {audio_kid}, attempting auto-fetch via Widevine...")
-            fetched = fetch_widevine_key(url, audio_kid, license_token=license_token)
+            fetched = fetch_widevine_key(url, audio_kid, license_token=license_token, asset_id=asset_id)
             if fetched is None:
                 logger.error(f"Audio key not found for {audio_kid} and auto-fetch failed.")
                 return
@@ -1556,7 +1589,7 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
     if video_kid is not None:
         if video_kid not in keys:
             logger.info(f"> Key not in keyfile for {video_kid}, attempting auto-fetch via Widevine...")
-            fetched = fetch_widevine_key(url, video_kid, license_token=license_token)
+            fetched = fetch_widevine_key(url, video_kid, license_token=license_token, asset_id=asset_id)
             if fetched is None:
                 logger.error(f"Video key not found for {video_kid} and auto-fetch failed.")
                 return
@@ -1752,6 +1785,7 @@ def process_lecture(lecture, lecture_path, chapter_dir):
     is_encrypted = lecture.get("is_encrypted")
     lecture_sources = lecture.get("video_sources")
     media_license_token = lecture.get("media_license_token")
+    asset_id = lecture.get("asset_id")
 
     if is_encrypted:
         if len(lecture_sources) > 0:
@@ -1771,6 +1805,7 @@ def process_lecture(lecture, lecture_path, chapter_dir):
                 lecture_path,
                 chapter_dir,
                 license_token=media_license_token,
+                asset_id=asset_id,
             )
         else:
             logger.info(f"      > Lecture '{lecture_title}' is missing media links")
