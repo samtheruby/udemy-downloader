@@ -1523,9 +1523,31 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None, asset_id=None):
 
 
 def handle_segments(url, format_id, lecture_id, video_title, output_path, chapter_dir, license_token=None, asset_id=None):
+    import glob as _glob
+
     video_filepath_enc = os.path.join(chapter_dir, lecture_id + ".encrypted.mp4")
     audio_filepath_enc = os.path.join(chapter_dir, lecture_id + ".encrypted.m4a")
     temp_output_path = os.path.join(chapter_dir, lecture_id + ".mp4")
+
+    def _cleanup():
+        # Remove all encrypted/partial files produced for this lecture,
+        # including aria2c fragment files (.part, .part-FragN).
+        for f in _glob.glob(os.path.join(chapter_dir, f"{lecture_id}.encrypted.*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        # If mux never completed the rename, remove the incomplete temp file.
+        if os.path.exists(temp_output_path):
+            try:
+                os.remove(temp_output_path)
+            except OSError:
+                pass
+        if url.startswith("file://"):
+            try:
+                os.unlink(url[7:])
+            except OSError:
+                pass
 
     logger.info("> Downloading Lecture Tracks...")
     args = [
@@ -1555,66 +1577,36 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
 
     if ret_code != 0:
         logger.warning("Return code from the downloader was non-0 (error), skipping!")
-        # Remove any partial/fragment files aria2c left behind
-        import glob as _glob
-        for _f in _glob.glob(os.path.join(chapter_dir, f"{lecture_id}.encrypted.*")):
-            try:
-                os.remove(_f)
-            except OSError:
-                pass
+        _cleanup()
         return
-
-    audio_kid = None
-    video_kid = None
 
     try:
         video_kid = extract_kid(video_filepath_enc)
         logger.info("KID for video file is: " + video_kid)
-    except Exception:
-        logger.exception(f"Error extracting video kid")
-        return
-
-    try:
         audio_kid = extract_kid(audio_filepath_enc)
         logger.info("KID for audio file is: " + audio_kid)
-    except Exception:
-        logger.exception(f"Error extracting audio kid")
-        return
 
-    audio_key = None
-    video_key = None
+        audio_key = None
+        video_key = None
 
-    if audio_kid is not None:
-        if audio_kid not in keys:
-            logger.info(f"> Key not in keyfile for {audio_kid}, attempting auto-fetch via Widevine...")
-            fetched = fetch_widevine_key(url, audio_kid, license_token=license_token, asset_id=asset_id)
-            if fetched is None:
-                logger.error(f"Audio key not found for {audio_kid} and auto-fetch failed.")
-                return
-        audio_key = keys.get(audio_kid)
+        if audio_kid is not None:
+            if audio_kid not in keys:
+                logger.info(f"> Key not in keyfile for {audio_kid}, attempting auto-fetch via Widevine...")
+                fetched = fetch_widevine_key(url, audio_kid, license_token=license_token, asset_id=asset_id)
+                if fetched is None:
+                    logger.error(f"Audio key not found for {audio_kid} and auto-fetch failed.")
+                    return
+            audio_key = keys.get(audio_kid)
 
-    if video_kid is not None:
-        if video_kid not in keys:
-            logger.info(f"> Key not in keyfile for {video_kid}, attempting auto-fetch via Widevine...")
-            fetched = fetch_widevine_key(url, video_kid, license_token=license_token, asset_id=asset_id)
-            if fetched is None:
-                logger.error(f"Video key not found for {video_kid} and auto-fetch failed.")
-                return
-        video_key = keys.get(video_kid)
+        if video_kid is not None:
+            if video_kid not in keys:
+                logger.info(f"> Key not in keyfile for {video_kid}, attempting auto-fetch via Widevine...")
+                fetched = fetch_widevine_key(url, video_kid, license_token=license_token, asset_id=asset_id)
+                if fetched is None:
+                    logger.error(f"Video key not found for {video_kid} and auto-fetch failed.")
+                    return
+            video_key = keys.get(video_kid)
 
-    try:
-        # logger.info("> Decrypting video, this might take a minute...")
-        # ret_code = decrypt(video_kid, video_filepath_enc, video_filepath_dec)
-        # if ret_code != 0:
-        #     logger.error("> Return code from the decrypter was non-0 (error), skipping!")
-        #     return
-        # logger.info("> Decryption complete")
-        # logger.info("> Decrypting audio, this might take a minute...")
-        # decrypt(audio_kid, audio_filepath_enc, audio_filepath_dec)
-        # if ret_code != 0:
-        #     logger.error("> Return code from the decrypter was non-0 (error), skipping!")
-        #     return
-        # logger.info("> Decryption complete")
         logger.info("> Merging video and audio, this might take a minute...")
         mux_process(
             video_filepath_enc,
@@ -1624,29 +1616,13 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
             audio_key,
             video_key,
         )
-        if ret_code != 0:
-            logger.error("> Return code from ffmpeg was non-0 (error), skipping!")
-            return
         logger.info("> Merging complete, renaming final file...")
         os.rename(temp_output_path, output_path)
+
     except Exception as e:
-        logger.exception(f"Muxing error: {e}")
+        logger.exception(f"Error processing lecture segments: {e}")
     finally:
-        # Always remove encrypted source files — they are unusable outside this
-        # tool regardless of whether muxing succeeded or failed.
-        for _enc in [video_filepath_enc, audio_filepath_enc]:
-            if os.path.exists(_enc):
-                try:
-                    os.remove(_enc)
-                    logger.debug(f"> Removed encrypted file: {os.path.basename(_enc)}")
-                except OSError as _e:
-                    logger.warning(f"> Could not remove {_enc}: {_e}")
-        # if the url is a file url, we need to remove the file after we're done with it
-        if url.startswith("file://"):
-            try:
-                os.unlink(url[7:])
-            except:
-                pass
+        _cleanup()
 
 
 def check_for_aria():
@@ -2040,6 +2016,9 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
     # mux into MKV with embedded subtitle tracks if requested
     if use_mkv and is_video:
         final_path = lecture_path.replace(".mp4", ".mkv")
+
+        # Run mkvmerge only when the source .mp4 exists and the .mkv does not
+        # yet (avoids re-muxing on re-runs).
         if os.path.isfile(lecture_path) and not os.path.isfile(final_path):
             mkv_args = ["mkvmerge", "-q", "-o", final_path, "--title", lecture_title, lecture_path]
             for lang, srt_path in downloaded_srt_paths:
@@ -2047,19 +2026,19 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
             ret = subprocess.Popen(mkv_args).wait()
             if ret != 0:
                 logger.warning("> mkvmerge returned non-zero, keeping source files")
-        # Whenever the .mkv exists (just created or from a prior run), remove
-        # the source .mp4 and any loose .srt files — they are embedded in the MKV.
+
+        # Whenever the .mkv exists — whether just created or from a prior run —
+        # clean up the source .mp4 and loose .srt files.  This covers:
+        #   • normal completion (mkvmerge just ran successfully)
+        #   • re-runs where .mkv already existed but .mp4 was re-downloaded
+        #   • re-runs where captions were re-downloaded alongside an existing .mkv
         if os.path.isfile(final_path):
-            if os.path.isfile(lecture_path):
-                try:
-                    os.remove(lecture_path)
-                except OSError:
-                    pass
-            for _, srt_path in downloaded_srt_paths:
-                try:
-                    os.remove(srt_path)
-                except OSError:
-                    pass
+            for path in [lecture_path] + [p for _, p in downloaded_srt_paths]:
+                if os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
 
     if dl_assets:
         assets = parsed_lecture.get("assets")
