@@ -1555,6 +1555,13 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
 
     if ret_code != 0:
         logger.warning("Return code from the downloader was non-0 (error), skipping!")
+        # Remove any partial/fragment files aria2c left behind
+        import glob as _glob
+        for _f in _glob.glob(os.path.join(chapter_dir, f"{lecture_id}.encrypted.*")):
+            try:
+                os.remove(_f)
+            except OSError:
+                pass
         return
 
     audio_kid = None
@@ -1622,12 +1629,18 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
             return
         logger.info("> Merging complete, renaming final file...")
         os.rename(temp_output_path, output_path)
-        logger.info("> Cleaning up temporary files...")
-        os.remove(video_filepath_enc)
-        os.remove(audio_filepath_enc)
     except Exception as e:
         logger.exception(f"Muxing error: {e}")
     finally:
+        # Always remove encrypted source files — they are unusable outside this
+        # tool regardless of whether muxing succeeded or failed.
+        for _enc in [video_filepath_enc, audio_filepath_enc]:
+            if os.path.exists(_enc):
+                try:
+                    os.remove(_enc)
+                    logger.debug(f"> Removed encrypted file: {os.path.basename(_enc)}")
+                except OSError as _e:
+                    logger.warning(f"> Could not remove {_enc}: {_e}")
         # if the url is a file url, we need to remove the file after we're done with it
         if url.startswith("file://"):
             try:
@@ -2032,13 +2045,21 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
             for lang, srt_path in downloaded_srt_paths:
                 mkv_args += ["--language", f"0:{lang}", "--track-name", f"0:{lang}", srt_path]
             ret = subprocess.Popen(mkv_args).wait()
-            if ret == 0:
-                os.remove(lecture_path)
-                for _, srt_path in downloaded_srt_paths:
-                    try:
-                        os.remove(srt_path)
-                    except OSError:
-                        pass
+            if ret != 0:
+                logger.warning("> mkvmerge returned non-zero, keeping source files")
+        # Whenever the .mkv exists (just created or from a prior run), remove
+        # the source .mp4 and any loose .srt files — they are embedded in the MKV.
+        if os.path.isfile(final_path):
+            if os.path.isfile(lecture_path):
+                try:
+                    os.remove(lecture_path)
+                except OSError:
+                    pass
+            for _, srt_path in downloaded_srt_paths:
+                try:
+                    os.remove(srt_path)
+                except OSError:
+                    pass
 
     if dl_assets:
         assets = parsed_lecture.get("assets")
