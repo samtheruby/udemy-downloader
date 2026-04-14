@@ -109,9 +109,8 @@ def deEmojify(inputStr: str):
 # from https://stackoverflow.com/a/21978778/9785713
 def log_subprocess_output(prefix: str, pipe: IO[bytes]):
     if pipe:
-        for line in iter(lambda: pipe.read(1), ""):
-            logger.debug("[%s]: %r", prefix, line.decode("utf8").strip())
-        pipe.flush()
+        for line in pipe:
+            logger.debug("[%s]: %s", prefix, line.decode("utf8", errors="replace").rstrip())
 
 
 def parse_chapter_filter(chapter_str: str):
@@ -1569,10 +1568,16 @@ def handle_segments(url, format_id, lecture_id, video_title, output_path, chapte
         format_id,
         f"{url}",
     ]
-    process = subprocess.Popen(args)
-    log_subprocess_output("YTDLP-STDOUT", process.stdout)
-    log_subprocess_output("YTDLP-STDERR", process.stderr)
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Read both pipes in threads to avoid deadlock when buffers fill
+    import threading
+    t_out = threading.Thread(target=log_subprocess_output, args=("YTDLP-STDOUT", process.stdout), daemon=True)
+    t_err = threading.Thread(target=log_subprocess_output, args=("YTDLP-STDERR", process.stderr), daemon=True)
+    t_out.start()
+    t_err.start()
     ret_code = process.wait()
+    t_out.join()
+    t_err.join()
     logger.info("> Lecture Tracks Downloaded")
 
     if ret_code != 0:
