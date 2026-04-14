@@ -1428,6 +1428,23 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
         if bearer_token:
             lic_headers["Authorization"] = f"Bearer {bearer_token}"
 
+        # The media_license_token JWT embeds the user_agent of the client that
+        # originally fetched the course data.  Udemy's license server validates
+        # that the request User-Agent matches.  Decode the payload (no signature
+        # verification needed — we just want the claim) and mirror it exactly.
+        if license_token:
+            try:
+                import base64 as _base64, json as _json
+                _payload_b64 = license_token.split('.')[1]
+                _payload_b64 += '=' * (-len(_payload_b64) % 4)
+                _claims = _json.loads(_base64.urlsafe_b64decode(_payload_b64))
+                _jwt_ua = _claims.get('user_agent')
+                if _jwt_ua:
+                    lic_headers['User-Agent'] = _jwt_ua
+                    logger.debug(f"> Using JWT user_agent for license request: {_jwt_ua}")
+            except Exception as _e:
+                logger.debug(f"> Could not decode license_token JWT: {_e}")
+
         if udemy_session is not None:
             lic_resp = udemy_session._session.post(
                 license_url,
@@ -1443,7 +1460,7 @@ def fetch_widevine_key(mpd_url, content_id, license_token=None):
             )
 
         if not lic_resp.ok:
-            logger.error(f"> License request failed: {lic_resp.status_code}")
+            logger.error(f"> License request failed: {lic_resp.status_code} — {lic_resp.text[:200]}")
             cdm.close(cdm_session)
             return None
 
