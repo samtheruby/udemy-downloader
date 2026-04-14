@@ -445,14 +445,12 @@ def pre_run():
     Path(DOWNLOAD_DIR).mkdir(parents=True, exist_ok=True)
     Path(SAVED_DIR).mkdir(parents=True, exist_ok=True)
 
-    # Get the keys
-    if os.path.exists(KEY_FILE_PATH):
-        with open(KEY_FILE_PATH, encoding="utf8", mode="r") as keyfile:
-            keys = json.loads(keyfile.read())
-    else:
-        logger.warning(
-            "> Keyfile not found! You won't be able to decrypt any encrypted videos!"
-        )
+    # Clear and reset the keyfile on every run so stale keys don't mask
+    # license request failures.  Fresh keys are fetched and re-cached as
+    # each DRM lecture is processed.
+    keys = {}
+    with open(KEY_FILE_PATH, encoding="utf8", mode="w") as keyfile:
+        keyfile.write("{}")
 
     # Process the chapter filter
     if args.chapter_filter_raw:
