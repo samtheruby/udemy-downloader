@@ -1748,21 +1748,22 @@ def process_caption(caption, lecture_title, lecture_dir, tries=0):
                 logger.error(
                     f"    > Error downloading caption: {e}. Exceeded retries, skipping."
                 )
-                return
+                return None
             else:
                 logger.error(
                     f"    > Error downloading caption: {e}. Will retry {3 - tries} more times."
                 )
-                process_caption(caption, lecture_title, lecture_dir, tries + 1)
-        if caption.get("extension") == "vtt":
-            try:
-                logger.info("    > Converting caption to SRT format...")
-                convert(lecture_dir, filename_no_ext)
-                logger.info("    > Caption conversion complete.")
-                if not keep_vtt:
-                    os.remove(filepath)
-            except Exception:
-                logger.exception(f"    > Error converting caption")
+                return process_caption(caption, lecture_title, lecture_dir, tries + 1)
+
+    if caption.get("extension") == "vtt":
+        try:
+            logger.info("    > Converting caption to SRT format...")
+            convert(lecture_dir, filename_no_ext)
+            logger.info("    > Caption conversion complete.")
+            if not keep_vtt:
+                os.remove(filepath)
+        except Exception:
+            logger.exception(f"    > Error converting caption")
 
     srt_path = os.path.join(lecture_dir, filename_no_ext + ".srt")
     return srt_path if os.path.isfile(srt_path) else None
@@ -1995,11 +1996,16 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
     is_video = extension == "mp4"
     subtitles = parsed_lecture.get("subtitles")
     downloaded_srt_paths = []  # [(lang, path)] collected for MKV embedding
+    _seen_caption_langs = set()
     if dl_captions and subtitles is not None and lecture_extension is None:
         logger.info("Processing {} caption(s)...".format(len(subtitles)))
         for subtitle in subtitles:
             lang = subtitle.get("language")
             if lang == caption_locale or caption_locale == "all":
+                if lang in _seen_caption_langs:
+                    logger.debug(f"    > Skipping duplicate caption language '{lang}'")
+                    continue
+                _seen_caption_langs.add(lang)
                 srt_path = process_caption(subtitle, lecture_title, chapter_dir)
                 if srt_path and os.path.isfile(srt_path):
                     downloaded_srt_paths.append((lang, srt_path))
