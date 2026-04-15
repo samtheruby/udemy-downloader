@@ -2000,6 +2000,10 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
 
     # download subtitles for this lecture
     is_video = extension == "mp4"
+    if use_mkv and is_video and os.path.isfile(lecture_path.replace(".mp4", ".mkv")):
+        # MKV already complete — subtitles embedded, assets won't have changed
+        return
+
     subtitles = parsed_lecture.get("subtitles")
     downloaded_srt_paths = []  # [(lang, path)] collected for MKV embedding
     _seen_caption_langs = set()
