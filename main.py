@@ -838,64 +838,70 @@ class Udemy:
         """extracts mpd streams"""
         _temp = {}
 
-        try:
-            ytdl = yt_dlp.YoutubeDL(
-                {
-                    "quiet": True,
-                    "no_warnings": True,
-                    "allow_unplayable_formats": True,
-                }
-            )
-            results = ytdl.extract_info(
-                url, download=False, force_generic_extractor=True
-            )
-            formats = results.get("formats", [])
-            best_audio = next(
-                f for f in formats if (f["acodec"] != "none" and f["vcodec"] == "none")
-            )
-            # filter formats to remove any audio only formats
-            formats = [
-                f for f in formats if f["vcodec"] != "none" and f["acodec"] == "none"
-            ]
-            if not best_audio:
-                raise ValueError("No suitable audio format found in MPD")
-            audio_format_id = best_audio.get("format_id")
-
-            for format in formats:
-                video_format_id = format.get("format_id")
-                extension = format.get("ext")
-                height = format.get("height")
-                width = format.get("width")
-                tbr = format.get("tbr", 0)
-
-                # add to dict based on height
-                if height not in _temp:
-                    _temp[height] = []
-
-                _temp[height].append(
+        for attempt in range(1, 4):
+            try:
+                ytdl = yt_dlp.YoutubeDL(
                     {
-                        "type": "dash",
-                        "height": str(height),
-                        "width": str(width),
-                        "format_id": f"{video_format_id},{audio_format_id}",
-                        "extension": extension,
-                        "download_url": url,
-                        "tbr": round(tbr),
+                        "quiet": True,
+                        "no_warnings": True,
+                        "allow_unplayable_formats": True,
                     }
                 )
-            # for each resolution, use only the highest bitrate
-            _temp2 = []
-            for height, formats in _temp.items():
-                if formats:
-                    # sort by tbr and take the first one
-                    formats.sort(key=lambda x: x["tbr"], reverse=True)
-                    _temp2.append(formats[0])
-                else:
-                    del _temp[height]
+                results = ytdl.extract_info(
+                    url, download=False, force_generic_extractor=True
+                )
+                formats = results.get("formats", [])
+                best_audio = next(
+                    f for f in formats if (f["acodec"] != "none" and f["vcodec"] == "none")
+                )
+                # filter formats to remove any audio only formats
+                formats = [
+                    f for f in formats if f["vcodec"] != "none" and f["acodec"] == "none"
+                ]
+                if not best_audio:
+                    raise ValueError("No suitable audio format found in MPD")
+                audio_format_id = best_audio.get("format_id")
 
-            _temp = _temp2
-        except Exception:
-            logger.exception(f"Error fetching MPD streams")
+                for format in formats:
+                    video_format_id = format.get("format_id")
+                    extension = format.get("ext")
+                    height = format.get("height")
+                    width = format.get("width")
+                    tbr = format.get("tbr", 0)
+
+                    # add to dict based on height
+                    if height not in _temp:
+                        _temp[height] = []
+
+                    _temp[height].append(
+                        {
+                            "type": "dash",
+                            "height": str(height),
+                            "width": str(width),
+                            "format_id": f"{video_format_id},{audio_format_id}",
+                            "extension": extension,
+                            "download_url": url,
+                            "tbr": round(tbr),
+                        }
+                    )
+                # for each resolution, use only the highest bitrate
+                _temp2 = []
+                for height, formats in _temp.items():
+                    if formats:
+                        # sort by tbr and take the first one
+                        formats.sort(key=lambda x: x["tbr"], reverse=True)
+                        _temp2.append(formats[0])
+                    else:
+                        del _temp[height]
+
+                _temp = _temp2
+                break  # success
+            except Exception as e:
+                if attempt < 3:
+                    logger.warning(f"Error fetching MPD streams (attempt {attempt}/3), retrying: {e}")
+                    time.sleep(5 * attempt)
+                else:
+                    logger.exception(f"Error fetching MPD streams (all attempts failed)")
 
         # We don't delete the mpd file yet because we can use it to download later
         return _temp
