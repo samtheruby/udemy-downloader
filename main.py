@@ -1979,7 +1979,8 @@ def _process_one_lecture(lecture, chapter_dir, total_lectures):
     if not skip_lectures:
         logger.info(f"  > Processing lecture {index} of {total_lectures}")
 
-        if os.path.isfile(lecture_path):
+        mkv_path = lecture_path.replace(".mp4", ".mkv")
+        if os.path.isfile(lecture_path) or (use_mkv and os.path.isfile(mkv_path)):
             logger.info("      > Lecture '%s' is already downloaded, skipping..." % lecture_title)
         else:
             if extension == "html":
